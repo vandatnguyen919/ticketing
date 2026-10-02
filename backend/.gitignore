@@ -1,0 +1,18 @@
+# Gradle
+.gradle/
+build/
+
+# Maven (legacy, safe to remove once target/ is deleted)
+target/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.project
+.classpath
+.settings/
+
+# OS
+.DS_Store
+Thumbs.db
