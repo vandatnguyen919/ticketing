@@ -3,6 +3,7 @@ package com.example.ticketing.config;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Stream;
 
 import javax.crypto.spec.SecretKeySpec;
@@ -10,11 +11,16 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.config.Customizer;
+import org.springframework.security.config.ObjectPostProcessor;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
+import org.springframework.security.web.authentication.session.SessionAuthenticationStrategy;
 import org.springframework.security.web.csrf.CsrfTokenRepository;
+import org.springframework.security.web.csrf.CsrfAuthenticationStrategy;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
+import org.springframework.security.web.csrf.CsrfFilter;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.web.SecurityFilterChain;
@@ -27,6 +33,8 @@ import org.springframework.beans.factory.annotation.Value;
 @EnableWebSecurity
 public class SecurityConfig {
 
+    private static final Set<String> SAFE_HTTP_METHODS = Set.of("GET", "HEAD", "OPTIONS", "TRACE");
+
     private final OAuth2LoginSuccessHandler oAuth2LoginSuccessHandler;
     private final OAuth2LoginFailureHandler oAuth2LoginFailureHandler;
     private final CookieBearerTokenResolver cookieBearerTokenResolver;
@@ -38,7 +46,6 @@ public class SecurityConfig {
         CsrfTokenRepository csrfTokenRepository
     ) throws Exception {
         http
-            .csrf(csrf -> csrf.csrfTokenRepository(csrfTokenRepository))
             .cors(Customizer.withDefaults())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
             .authorizeHttpRequests(authorize -> authorize
@@ -58,7 +65,20 @@ public class SecurityConfig {
                 .failureHandler(oAuth2LoginFailureHandler))
             .oauth2ResourceServer(resourceServer -> resourceServer
                 .bearerTokenResolver(cookieBearerTokenResolver)
-                .jwt(Customizer.withDefaults()));
+                .jwt(Customizer.withDefaults()))
+            .csrf(csrf -> csrf
+                .spa()
+                .csrfTokenRepository(csrfTokenRepository)
+                .sessionAuthenticationStrategy(csrfSessionAuthenticationStrategy(csrfTokenRepository))
+                .withObjectPostProcessor(new ObjectPostProcessor<CsrfFilter>() {
+                    @Override
+                    public <O extends CsrfFilter> O postProcess(O filter) {
+                        filter.setRequireCsrfProtectionMatcher(
+                            request -> !SAFE_HTTP_METHODS.contains(request.getMethod())
+                        );
+                        return filter;
+                    }
+                }));
 
         return http.build();
     }
@@ -78,9 +98,23 @@ public class SecurityConfig {
     @Bean
     public CsrfTokenRepository csrfTokenRepository() {
         CookieCsrfTokenRepository repository = CookieCsrfTokenRepository.withHttpOnlyFalse();
-        repository.setCookiePath("/api");
-        repository.setCookieCustomizer(cookie -> cookie.secure(cookieSecure).sameSite("Lax"));
+        repository.setCookiePath("/");
+        repository.setCookieCustomizer(cookie -> {
+            cookie.secure(cookieSecure);
+            cookie.sameSite("Lax");
+        });
         return repository;
+    }
+
+    private SessionAuthenticationStrategy csrfSessionAuthenticationStrategy(
+        CsrfTokenRepository csrfTokenRepository
+    ) {
+        CsrfAuthenticationStrategy delegate = new CsrfAuthenticationStrategy(csrfTokenRepository);
+        return (authentication, request, response) -> {
+            if (!(authentication instanceof JwtAuthenticationToken)) {
+                delegate.onAuthentication(authentication, request, response);
+            }
+        };
     }
 
     @Bean
@@ -91,7 +125,7 @@ public class SecurityConfig {
             "http://localhost:5173",
             "http://127.0.0.1:5173"
         ).distinct().toList());
-        config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+        config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of("Content-Type", "X-Requested-With", "X-XSRF-TOKEN"));
         config.setAllowCredentials(true);
         config.setMaxAge(Duration.ofHours(1));

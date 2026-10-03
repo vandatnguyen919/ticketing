@@ -1,5 +1,11 @@
+import axios, { type AxiosRequestConfig } from 'axios';
+
 export const API_ORIGIN = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080').replace(/\/+$/, '');
 export const API_V1 = `${API_ORIGIN}/api/v1`;
+
+const CSRF_COOKIE = 'XSRF-TOKEN';
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'TRACE']);
+let csrfInitialization: Promise<void> | null = null;
 
 export class UnauthorizedApiError extends Error {
   constructor() {
@@ -8,82 +14,92 @@ export class UnauthorizedApiError extends Error {
   }
 }
 
-const SAFE_METHODS = ['GET', 'HEAD', 'OPTIONS', 'TRACE'];
+export const apiClient = axios.create({
+  baseURL: API_V1,
+  withCredentials: true,
+  xsrfCookieName: CSRF_COOKIE,
+  xsrfHeaderName: 'X-XSRF-TOKEN',
+  withXSRFToken: ({ method }) => !SAFE_METHODS.has((method ?? 'GET').toUpperCase())
+});
 
-type CsrfResponse = {
-  headerName: string;
-  token: string;
-};
-
-let csrfToken: Promise<CsrfResponse> | null = null;
-
-async function loadCsrfToken(): Promise<CsrfResponse> {
-  const response = await fetch(`${API_V1}/auth/csrf`, { credentials: 'include' });
-  if (response.status === 401) {
-    throw new UnauthorizedApiError();
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error: unknown) => {
+    if (axios.isAxiosError(error) && error.response?.status === 401) {
+      return Promise.reject(new UnauthorizedApiError());
+    }
+    return Promise.reject(error);
   }
-  if (!response.ok) {
-    throw new Error('Unable to initialize secure sign-in.');
-  }
+);
 
-  const csrf: unknown = await response.json();
-  if (
-    typeof csrf !== 'object' ||
-    csrf === null ||
-    !('headerName' in csrf) ||
-    typeof csrf.headerName !== 'string' ||
-    !('token' in csrf) ||
-    typeof csrf.token !== 'string'
-  ) {
-    throw new Error('The API returned an invalid CSRF token response.');
+function hasCsrfCookie(): boolean {
+  if (typeof document === 'undefined') {
+    return false;
   }
-  return { headerName: csrf.headerName, token: csrf.token };
-}
-
-function getCsrfToken(): Promise<CsrfResponse> {
-  csrfToken ??= loadCsrfToken().catch((error) => {
-    csrfToken = null;
-    throw error;
+  const prefix = `${CSRF_COOKIE}=`;
+  return document.cookie.split(';').some((cookie) => {
+    const entry = cookie.trimStart();
+    return entry.startsWith(prefix) && entry.length > prefix.length;
   });
-  return csrfToken;
 }
 
-export function resetCsrfToken(): void {
-  csrfToken = null;
+async function ensureCsrfCookie(): Promise<void> {
+  if (hasCsrfCookie()) {
+    return;
+  }
+
+  if (csrfInitialization === null) {
+    const initialization = apiClient.get('/auth/csrf')
+      .then(() => {
+        if (!hasCsrfCookie()) {
+          throw new Error('The CSRF cookie is unavailable to this frontend.');
+        }
+      })
+      .catch((error: unknown) => {
+        if (error instanceof UnauthorizedApiError) {
+          throw error;
+        }
+        throw new Error('Unable to initialize secure sign-in.');
+      });
+    csrfInitialization = initialization;
+  }
+
+  const initialization = csrfInitialization;
+  try {
+    await initialization;
+  } finally {
+    if (csrfInitialization === initialization) {
+      csrfInitialization = null;
+    }
+  }
 }
 
-async function send(
+export async function apiRequest<T = unknown>(
   path: string,
-  method: string,
-  init: RequestInit,
-  csrf: CsrfResponse | null
-): Promise<Response> {
-  const headers = new Headers(init.headers);
-  if (csrf !== null) {
-    headers.set(csrf.headerName, csrf.token);
+  config: AxiosRequestConfig = {}
+) {
+  const method = (config.method ?? 'GET').toUpperCase();
+  if (!SAFE_METHODS.has(method)) {
+    await ensureCsrfCookie();
   }
-  return fetch(`${API_V1}${path.startsWith('/') ? path : `/${path}`}`, {
-    ...init,
-    method,
-    headers,
-    credentials: 'include'
-  });
+  return apiClient.request<T>({ ...config, url: path });
 }
 
-export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
-  const method = (init.method ?? 'GET').toUpperCase();
-  const unsafe = !SAFE_METHODS.includes(method);
-
-  let response = await send(path, method, init, unsafe ? await getCsrfToken() : null);
-  if (unsafe && response.status === 403) {
-    // A rejected request changes nothing, so it is safe to replay once with a
-    // freshly issued token in case the server rotated the token.
-    resetCsrfToken();
-    response = await send(path, method, init, await getCsrfToken());
+export function apiErrorMessage(error: unknown, fallback: string): string {
+  if (axios.isAxiosError(error)) {
+    const body: unknown = error.response?.data;
+    if (typeof body === 'string' && body.trim() !== '') {
+      return body;
+    }
+    if (typeof body === 'object' && body !== null) {
+      const details = body as Record<string, unknown>;
+      for (const key of ['message', 'detail', 'title']) {
+        if (typeof details[key] === 'string') {
+          return details[key];
+        }
+      }
+    }
+    return fallback;
   }
-
-  if (response.status === 401) {
-    throw new UnauthorizedApiError();
-  }
-  return response;
+  return error instanceof Error ? error.message : fallback;
 }

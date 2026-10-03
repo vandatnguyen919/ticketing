@@ -1,4 +1,4 @@
-import { apiFetch, resetCsrfToken } from './api';
+import { apiRequest } from './api';
 
 export type UserProfile = {
   email: string;
@@ -23,16 +23,11 @@ function parseUserProfile(value: unknown): UserProfile {
 }
 
 export async function exchangeOAuthSession(): Promise<UserProfile> {
-  const response = await apiFetch('/auth/exchange-session', {
+  const response = await apiRequest<unknown>('/auth/exchange-session', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: '{}'
+    data: {}
   });
-  if (!response.ok) {
-    throw new Error('Unable to complete provider sign-in.');
-  }
-  resetCsrfToken();
-  const result: unknown = await response.json();
+  const result: unknown = response.data;
   if (typeof result !== 'object' || result === null || !('user' in result)) {
     throw new Error('The API returned an invalid sign-in response.');
   }
@@ -40,17 +35,10 @@ export async function exchangeOAuthSession(): Promise<UserProfile> {
 }
 
 export async function loadCurrentUser(): Promise<UserProfile> {
-  const response = await apiFetch('/auth/me');
-  if (!response.ok) {
-    throw new Error('Unable to load your signed-in profile.');
-  }
-  return parseUserProfile(await response.json());
+  const response = await apiRequest<unknown>('/auth/me');
+  return parseUserProfile(response.data);
 }
 
 export async function logout(): Promise<void> {
-  const response = await apiFetch('/auth/logout', { method: 'POST' });
-  if (!response.ok) {
-    throw new Error('Unable to log out. Please try again.');
-  }
-  resetCsrfToken();
+  await apiRequest('/auth/logout', { method: 'POST' });
 }
