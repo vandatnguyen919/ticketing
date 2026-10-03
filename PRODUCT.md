@@ -35,7 +35,7 @@ Not now, and intentionally out of scope:
 - API authentication uses a backend-issued JWT in an HttpOnly, Secure-in-production, SameSite=Lax cookie. JavaScript never reads or persists the JWT.
 - The backend handles provider authorization-code callbacks; the temporary OAuth session is exchanged through a CSRF-protected endpoint for a JWT cookie and safe user profile.
 - OAuth provider client credentials are stored in Vault and loaded by the backend at startup, not committed configuration.
-- The frontend includes credentials on API calls and sends a CSRF token on unsafe methods, caching one token per sign-in session and refreshing it after sign-in, sign-out, or a rejected unsafe request; users sign in again after JWT expiry because refresh tokens are not in scope.
+- The frontend includes credentials on API calls and sends a CSRF token on unsafe methods by copying the readable `XSRF-TOKEN` cookie value into `X-XSRF-TOKEN` at request time. The client never caches tokens and never retries a rejected unsafe request; `GET /api/v1/auth/csrf` only bootstraps the cookie and returns no token value. Users sign in again after JWT expiry because refresh tokens are not in scope.
 - The JWT signing key is stored in Vault as `security.jwt-secret`; no default signing key is configured.
 - REST routes use Spring MVC native API version mappings under `/api/v1`, with `v1` as the default version.
 - OAuth user identity is persisted as a Spring Data JDBC aggregate keyed by provider and stable provider subject, not email.
