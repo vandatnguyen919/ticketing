@@ -55,11 +55,9 @@ public class AuthController {
     }
 
     @GetMapping("/csrf")
-    public Map<String, String> csrfToken(CsrfToken csrfToken) {
-        return Map.of(
-            "headerName", csrfToken.getHeaderName(),
-            "token", csrfToken.getToken()
-        );
+    public ResponseEntity<Void> csrfToken(CsrfToken csrfToken) {
+        csrfToken.getToken();
+        return ResponseEntity.noContent().build();
     }
 
     @PostMapping(value = "/exchange-session", consumes = MediaType.APPLICATION_JSON_VALUE)

@@ -17,7 +17,7 @@ import {
   EventCheckout,
   type CheckoutEvent,
 } from '@/components/commercn/checkouts/checkout-02';
-import { API_ORIGIN, apiFetch, UnauthorizedApiError } from '@/lib/api';
+import { API_ORIGIN, apiErrorMessage, apiRequest, UnauthorizedApiError } from '@/lib/api';
 import { exchangeOAuthSession, loadCurrentUser, logout as logoutSession, type UserProfile } from '@/lib/auth';
 
 type EventItem = CheckoutEvent;
@@ -40,14 +40,10 @@ function EventCatalog() {
   const fetchEvents = async () => {
     setLoading(true);
     try {
-      const response = await apiFetch('/events');
-      if (!response.ok) {
-        throw new Error('Unable to load events.');
-      }
-      const data = (await response.json()) as EventItem[];
-      setEvents(data);
+      const response = await apiRequest<EventItem[]>('/events');
+      setEvents(response.data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to load events.');
+      setError(apiErrorMessage(err, 'Unable to load events.'));
     } finally {
       setLoading(false);
     }
@@ -63,7 +59,7 @@ function EventCatalog() {
         setUser(null);
         return;
       }
-      setError(err instanceof Error ? err.message : 'Unable to log out.');
+      setError(apiErrorMessage(err, 'Unable to log out.'));
     }
   };
 
@@ -77,11 +73,7 @@ function EventCatalog() {
     setError(null);
 
     try {
-      const response = await apiFetch(`/events/${eventId}/book`, { method: 'POST' });
-      if (!response.ok) {
-        const message = await response.text();
-        throw new Error(message || 'Booking failed.');
-      }
+      await apiRequest(`/events/${eventId}/book`, { method: 'POST' });
 
       await fetchEvents();
       setSelectedEvent(null);
@@ -89,7 +81,7 @@ function EventCatalog() {
       if (err instanceof UnauthorizedApiError) {
         setUser(null);
       }
-      setError(err instanceof Error ? err.message : 'Booking failed.');
+      setError(apiErrorMessage(err, 'Booking failed.'));
     } finally {
       setBookingLoading(null);
     }
@@ -123,7 +115,7 @@ function EventCatalog() {
         setError(null);
       } catch (err) {
         setUser(null);
-        setError(err instanceof Error ? err.message : 'Unable to complete sign-in.');
+        setError(apiErrorMessage(err, 'Unable to complete sign-in.'));
       } finally {
         navigate('/', { replace: true });
       }
@@ -151,7 +143,7 @@ function EventCatalog() {
         if (err instanceof UnauthorizedApiError) {
           setUser(null);
         } else {
-          setError(err instanceof Error ? err.message : 'Unable to load your profile.');
+          setError(apiErrorMessage(err, 'Unable to load your profile.'));
         }
       }
     };

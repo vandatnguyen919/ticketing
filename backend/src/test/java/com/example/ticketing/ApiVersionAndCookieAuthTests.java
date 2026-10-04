@@ -9,6 +9,11 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -27,8 +32,10 @@ import org.springframework.http.MediaType;
 import org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 
 import com.example.ticketing.config.OAuth2LoginSuccessHandler;
+import com.example.ticketing.model.BookingResponse;
 import com.example.ticketing.model.UserProfile;
 import com.example.ticketing.service.EventService;
 import com.example.ticketing.service.JwtService;
@@ -82,6 +89,25 @@ class ApiVersionAndCookieAuthTests {
     }
 
     @Test
+    void initializesReadableRootScopedCsrfCookieWithoutReturningToken() throws Exception {
+        MvcResult result = mockMvc.perform(get("/api/v1/auth/csrf"))
+            .andExpect(status().isNoContent())
+            .andExpect(content().string(""))
+            .andExpect(header().string("Set-Cookie", allOf(
+                containsString("XSRF-TOKEN="),
+                containsString("Path=/"),
+                containsString("Secure")
+            )))
+            .andReturn();
+        Cookie csrfCookie = result.getResponse().getCookie("XSRF-TOKEN");
+        assertNotNull(csrfCookie);
+        assertEquals("/", csrfCookie.getPath());
+        assertTrue(csrfCookie.getSecure());
+        assertFalse(csrfCookie.isHttpOnly());
+        assertEquals("Lax", csrfCookie.getAttribute("SameSite"));
+    }
+
+    @Test
     void rejectsInvalidAndExpiredCredentialCookies() throws Exception {
         mockMvc.perform(get("/api/v1/auth/me").cookie(new Cookie("ticketing-token", "not-a-jwt")))
             .andExpect(status().isUnauthorized());
@@ -92,11 +118,19 @@ class ApiVersionAndCookieAuthTests {
 
     @Test
     void unsafeLogoutRequiresCsrfAndExpiresTheCookie() throws Exception {
-        mockMvc.perform(post("/api/v1/auth/logout"))
+        Cookie csrfCookie = csrfCookie();
+
+        mockMvc.perform(post("/api/v1/auth/logout").cookie(csrfCookie))
             .andExpect(status().isForbidden());
 
         mockMvc.perform(post("/api/v1/auth/logout")
-                .with(SecurityMockMvcRequestPostProcessors.csrf()))
+                .cookie(csrfCookie)
+                .header("X-XSRF-TOKEN", "mismatched-token"))
+            .andExpect(status().isForbidden());
+
+        mockMvc.perform(post("/api/v1/auth/logout")
+                .cookie(csrfCookie)
+                .header("X-XSRF-TOKEN", csrfCookie.getValue()))
             .andExpect(status().isNoContent())
             .andExpect(header().string("Set-Cookie", allOf(
                 containsString("ticketing-token="),
@@ -108,14 +142,42 @@ class ApiVersionAndCookieAuthTests {
     }
 
     @Test
+    void bookingRequiresTheCsrfCookieAndMatchingHeader() throws Exception {
+        Cookie authenticationCookie = new Cookie("ticketing-token", validToken());
+        Cookie csrfCookie = csrfCookie();
+        when(eventService.bookTicket(1L, "person@example.com"))
+            .thenReturn(new BookingResponse(1L, "person@example.com", 4));
+
+        mockMvc.perform(post("/api/v1/events/1/book")
+                .cookie(authenticationCookie))
+            .andExpect(status().isForbidden());
+
+        mockMvc.perform(post("/api/v1/events/1/book")
+                .cookie(authenticationCookie, csrfCookie))
+            .andExpect(status().isForbidden());
+
+        MvcResult successfulBooking = mockMvc.perform(post("/api/v1/events/1/book")
+                .cookie(authenticationCookie, csrfCookie)
+                .header("X-XSRF-TOKEN", csrfCookie.getValue()))
+            .andExpect(status().isOk())
+            .andReturn();
+        assertTrue(
+            successfulBooking.getResponse().getHeaders("Set-Cookie").isEmpty(),
+            successfulBooking.getResponse().getHeaders("Set-Cookie").toString()
+        );
+    }
+
+    @Test
     void exchangeSetsSecureHttpOnlySameSiteCookieAndDoesNotReturnJwt() throws Exception {
+        Cookie csrfCookie = csrfCookie();
         UserProfile profile = new UserProfile("person@example.com", "Example Person", "google", "google-subject");
         when(jwtService.generateToken(profile))
             .thenReturn(new JwtService.IssuedToken("signed-jwt", Instant.now().plusSeconds(3600)));
 
         mockMvc.perform(post("/api/v1/auth/exchange-session")
                 .with(SecurityMockMvcRequestPostProcessors.oauth2Login())
-                .with(SecurityMockMvcRequestPostProcessors.csrf())
+            .cookie(csrfCookie)
+            .header("X-XSRF-TOKEN", csrfCookie.getValue())
                 .sessionAttr(OAuth2LoginSuccessHandler.USER_PROFILE_SESSION_ATTRIBUTE, profile)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{}"))
@@ -141,6 +203,7 @@ class ApiVersionAndCookieAuthTests {
                 .header("Access-Control-Request-Headers", "X-XSRF-TOKEN"))
             .andExpect(status().isOk())
             .andExpect(header().string("Access-Control-Allow-Headers", containsString("X-XSRF-TOKEN")))
+            .andExpect(header().string("Access-Control-Allow-Methods", containsString("PATCH")))
             .andExpect(header().string("Access-Control-Max-Age", "3600"));
     }
 
@@ -155,5 +218,32 @@ class ApiVersionAndCookieAuthTests {
             Jwts.SIG.HS256
             )
             .compact();
+    }
+
+    private String validToken() {
+        Instant issuedAt = Instant.now();
+        return Jwts.builder()
+            .subject("person@example.com")
+            .issuedAt(Date.from(issuedAt))
+            .expiration(Date.from(issuedAt.plusSeconds(3600)))
+            .claim("name", "Example Person")
+            .claim("provider", "google")
+            .claim("providerId", "google-subject")
+            .signWith(
+                Keys.hmacShaKeyFor("01234567890123456789012345678901".getBytes(StandardCharsets.UTF_8)),
+                Jwts.SIG.HS256
+            )
+            .compact();
+    }
+
+    private Cookie csrfCookie() throws Exception {
+        MvcResult result = mockMvc.perform(get("/api/v1/auth/csrf"))
+            .andExpect(status().isNoContent())
+            .andReturn();
+        Cookie cookie = result.getResponse().getCookie("XSRF-TOKEN");
+        if (cookie == null) {
+            throw new AssertionError("The CSRF bootstrap endpoint did not issue an XSRF-TOKEN cookie.");
+        }
+        return cookie;
     }
 }
