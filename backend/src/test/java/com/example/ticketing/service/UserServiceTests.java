@@ -37,8 +37,8 @@ class UserServiceTests {
     }
 
     @Test
-    void updatesOnlyTheMatchingProviderSubject() {
-        User existing = new User(4L, "old@example.com", "Old Name", OAuthProvider.GITHUB, "12345");
+    void updatesOnlyTheMatchingProviderSubjectAndKeepsItsLocalPassword() {
+        User existing = new User(4L, "old@example.com", "Old Name", OAuthProvider.GITHUB, "12345", "bcrypt-hash");
         UserProfile profile = new UserProfile("new@example.com", "New Name", "github", "12345");
         when(userRepository.findByProviderAndProviderId(OAuthProvider.GITHUB, "12345"))
             .thenReturn(Optional.of(existing));
@@ -50,6 +50,9 @@ class UserServiceTests {
         assertEquals("new@example.com", saved.email());
         assertEquals("New Name", saved.name());
         assertEquals("12345", saved.providerId());
+        var argument = org.mockito.ArgumentCaptor.forClass(User.class);
+        verify(userRepository).save(argument.capture());
+        assertEquals("bcrypt-hash", argument.getValue().passwordHash());
         verify(userRepository).findByProviderAndProviderId(OAuthProvider.GITHUB, "12345");
     }
 

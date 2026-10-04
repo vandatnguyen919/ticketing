@@ -26,14 +26,16 @@ public class UserService {
                 profile.email(),
                 profile.name(),
                 provider,
-                profile.providerId()
+                profile.providerId(),
+                existing.passwordHash()
             ))
             .orElseGet(() -> new User(
                 null,
                 profile.email(),
                 profile.name(),
                 provider,
-                profile.providerId()
+                profile.providerId(),
+                null
             ));
         User saved = userRepository.save(user);
         return new UserProfile(

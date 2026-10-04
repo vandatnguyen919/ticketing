@@ -4,7 +4,8 @@ import java.util.Locale;
 
 public enum OAuthProvider {
     GITHUB,
-    GOOGLE;
+    GOOGLE,
+    EMAIL;
 
     public static OAuthProvider fromRegistrationId(String registrationId) {
         try {

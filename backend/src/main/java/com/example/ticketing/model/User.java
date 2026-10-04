@@ -10,6 +10,7 @@ public record User(
     String email,
     @Column("display_name") String displayName,
     OAuthProvider provider,
-    @Column("provider_id") String providerId
+    @Column("provider_id") String providerId,
+    @Column("password_hash") String passwordHash
 ) {
 }
