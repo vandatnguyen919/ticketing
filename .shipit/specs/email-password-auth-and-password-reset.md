@@ -1,5 +1,8 @@
 # Email/password authentication and password reset API
 
+**Status:** implemented and verified on 2026-10-04. The React screens listed at
+the end are a separate follow-up, so this spec covers the backend API only.
+
 ## Goal
 
 Add traditional email and password registration and login next to the existing
@@ -56,8 +59,10 @@ password, and reset password are a follow-up.
   bcrypt, display name is 1 to 100 characters.
 - Create a `users` row with `provider = 'EMAIL'`, `provider_id` set to the
   normalized email, and `password_hash` set to a `BCryptPasswordEncoder` hash.
-- A duplicate email returns 409. This is the one endpoint that reveals account
-  existence, because signup needs that feedback.
+- A duplicate email returns 409. The check spans every provider row, so nobody
+  can register a password for an address another account already uses. This is
+  the one endpoint that reveals account existence, because signup needs that
+  feedback.
 - Success returns 201 Created with the safe profile body and sets the same
   HttpOnly JWT cookie that OAuth exchange sets, so the user is signed in
   immediately. The JWT is never in the response body.
@@ -109,6 +114,10 @@ password, and reset password are a follow-up.
 - The ticket is single use. A second confirm with the same ticket returns 400
   with `reset_ticket_invalid`. An expired or unknown ticket returns the same
   error.
+- Confirming closes the whole reset flow. Every other ticket minted earlier for
+  that account is rejected as well, so a completed password change cannot be
+  undone with a leftover ticket. A ticket is also rejected once a newer code has
+  replaced the code it was minted from.
 - Confirm does not sign the user in. The client routes to login afterwards.
 
 ### REQ-007: OTP and ticket storage through the Spring Cache abstraction
@@ -232,7 +241,7 @@ Request:
 | --- | --- | --- |
 | 200 OK | `{ "resetTicket": "<opaque>", "expiresInSeconds": 300 }` | Single-use ticket for the confirm step. |
 | 400 Bad Request | `invalid_otp` | Wrong code. |
-| 400 Bad Request | `otp_expired` | Code past its 10 minute TTL. |
+| 400 Bad Request | `otp_expired` | Code past its 10 minute TTL, or no code was ever requested. |
 | 400 Bad Request | `otp_locked` | 5 failed attempts; a new request is required. |
 | 403 Forbidden | CSRF failure | Missing or invalid `X-XSRF-TOKEN`. |
 
@@ -248,7 +257,7 @@ Request:
 | --- | --- | --- |
 | 204 No Content | empty | Password updated. Client routes to login. |
 | 400 Bad Request | `validation_error` | New password fails the password rules. |
-| 400 Bad Request | `reset_ticket_invalid` | Unknown, expired, or already used ticket. |
+| 400 Bad Request | `reset_ticket_invalid` | Unknown, expired, already used, or superseded ticket. |
 | 403 Forbidden | CSRF failure | Missing or invalid `X-XSRF-TOKEN`. |
 
 ## Internal packages
@@ -259,12 +268,13 @@ this work.
 
 | Package | Contents |
 | --- | --- |
+| `auth` | `AuthProperties` for the feature settings (code length, TTLs, attempt limit, cooldown, mail from-address) and `EmailNormalizer` |
 | `auth.dto` | `RegisterRequest`, `LoginRequest`, `PasswordResetRequest`, `PasswordResetVerifyRequest`, `PasswordResetConfirmRequest`, `PasswordResetRequestResponse`, `PasswordResetVerifyResponse`, `ApiError` |
-| `auth.service` | `EmailPasswordUserService` for registration and user loading, `PasswordResetService` for request, verify, and confirm orchestration |
-| `auth.otp` | `OtpCacheService` and `ResetTicketStore` built on `CacheManager` with `@Cacheable` / `@CachePut` / `@CacheEvict`, plus `OtpRecord` and `ResetTicketRecord` |
-| `auth.mail` | `AuthEmailService` port, `AsyncAuthEmailService` with `@Async`, `LoggingAuthEmailService` for local and test runs, `MailAuthEmailService` using `JavaMailSender` for production |
-| `auth.security` | `LocalUserDetailsService` and the `DaoAuthenticationProvider` wiring |
-| `auth.web` | `EmailPasswordAuthController` and `PasswordResetController` |
+| `auth.service` | `EmailPasswordUserService` for registration and user loading, `PasswordResetService` for request, verify, and confirm orchestration, and the service exceptions the error codes come from |
+| `auth.otp` | `OtpStore` and `ResetTicketStore` built on `CacheManager` with `@Cacheable` / `@CachePut` / `@CacheEvict`, plus `OtpRecord`, `ResetTicketRecord`, and `ResetCacheConfiguration` |
+| `auth.mail` | `AuthEmailService` port and `JavaMailAuthEmailService`, the `JavaMailSender` implementation dispatched with `@Async` |
+| `auth.security` | `LocalUserDetailsService` and `LocalAuthenticationConfiguration` with the `BCryptPasswordEncoder` and `DaoAuthenticationProvider` beans |
+| `auth.web` | `EmailPasswordAuthController`, `PasswordResetController`, and `AuthApiExceptionHandler` for the `ApiError` bodies |
 
 Existing packages change in place:
 
@@ -306,8 +316,9 @@ New Flyway migration `V3__add_local_password_credentials.sql`:
 - `docker-compose.yml` - the Mailpit service is already added, pinned to
   `axllent/mailpit:v1.31.3` with SMTP on `127.0.0.1:1025` and the UI on
   `127.0.0.1:8025`, both loopback only for local development like the Vault UI.
-- `config/SecurityConfig.java` - new public route rules and the authentication
-  provider wiring described above.
+- `config/SecurityConfig.java` - the new public route rules. The
+  `BCryptPasswordEncoder` and `DaoAuthenticationProvider` beans live in
+  `auth.security.LocalAuthenticationConfiguration`.
 
 ## Decisions made in this spec
 
@@ -321,6 +332,8 @@ New Flyway migration `V3__add_local_password_credentials.sql`:
 - Codes are 6 digits with a 10 minute TTL and 5 attempts. Reset tickets live 5
   minutes and are single use.
 - Cache entries store hashes only.
+- An unknown or never-requested code reports `otp_expired`, the same answer as
+  a code past its TTL, so the two cases cannot be told apart.
 - Only transactional authentication email is sent. Ticket email stays out of
   scope.
 - Mailpit is the local and test mail target. It captures reset emails for
@@ -343,7 +356,7 @@ New Flyway migration `V3__add_local_password_credentials.sql`:
 - The reset email is dispatched asynchronously and never delays or changes the
   API response.
 - Verify returns a single-use ticket; confirm consumes it once, stores a bcrypt
-  hash, and clears both cache entries.
+  hash, and clears both cache entries, so no earlier ticket survives the reset.
 - Codes expire after 10 minutes and lock after 5 failed attempts; tickets expire
   after 5 minutes and cannot be reused.
 - CSRF protection applies to all five POST routes.
@@ -375,6 +388,22 @@ New Flyway migration `V3__add_local_password_credentials.sql`:
   Compose: run the five endpoints with curl, confirm the reset code shows up in
   the Mailpit UI at `http://127.0.0.1:8025`, confirm expiry, lockout, ticket
   reuse rejection, and that the JWT is only ever in the cookie.
+
+Run on 2026-10-04: `gradlew test` passed with 72 tests and no failures. That
+covers the end-to-end flow against disposable Postgres and Mailpit containers
+(register, reset request, the emailed code, a wrong code, verify, confirm,
+ticket reuse, login with the new password, rejection of the old one), the V3
+migration test, the cache TTL and store tests, and the async dispatch tests
+that prove the caller does not wait on SMTP and that a send failure never
+surfaces to the API. The manual curl pass against the compose backend was not
+run because it needs Dan's unsealed Vault secrets; the container-backed flow
+exercises the same endpoints and code paths.
+
+A code review of the finished diff caught two real defects, both fixed and
+covered by regression tests: a completed reset did not invalidate tickets
+minted earlier from the same code (an attacker holding the code could take the
+account back after the victim changed the password), and two racing
+registrations for one address returned 500 instead of the documented 409.
 
 ## Open items
 

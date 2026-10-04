@@ -1,0 +1,82 @@
+{
+  "info": {
+    "_postman_id": "146d5b05-483b-4b8a-aa71-c1df478b4e63",
+    "name": "New Collection",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "CSRF",
+      "id": "778fd2ec-dc31-4b20-8c39-c373d060511c",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "localhost:8080/api/v1/auth/csrf",
+          "host": [
+            "localhost"
+          ],
+          "port": "8080",
+          "path": [
+            "api",
+            "v1",
+            "auth",
+            "csrf"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Logout",
+      "id": "b22c0775-c0db-452a-a91f-d0daeaa70ae9",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-XSRF-TOKEN",
+            "value": "q3JfwuDQQ31lewIdTYO5by0NT5_ComTu9iWq_15gG51yP56Cmkdo84TmdhhIHmZ_fq6NChg4YqamlQfDx0GZnWlWf6lKCaa3",
+            "type": "text",
+            "uuid": "6911ef30-edc9-41ee-9f40-7f0ebebdd03d"
+          }
+        ],
+        "url": {
+          "raw": "localhost:8080/api/v1/auth/logout",
+          "host": [
+            "localhost"
+          ],
+          "port": "8080",
+          "path": [
+            "api",
+            "v1",
+            "auth",
+            "logout"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Booking",
+      "id": "3ad8d41f-7586-4747-90cd-f4c2e6d4af59",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "localhost:8080/api/v1/auth/logout",
+          "host": [
+            "localhost"
+          ],
+          "port": "8080",
+          "path": [
+            "api",
+            "v1",
+            "auth",
+            "logout"
+          ]
+        }
+      },
+      "response": []
+    }
+  ]
+}
